@@ -35,7 +35,7 @@ export async function enqueueJob(jobName: string,payload: Payload, priority: num
         keys.pending(),
         {
             score : newJob.runAt,
-            value : JSON.stringify(newJob)
+            value : newJob.id
         }
     )
 
