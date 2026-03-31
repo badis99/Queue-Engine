@@ -1,0 +1,48 @@
+{
+  "name": "queue-engine",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev":      "tsx watch src/index.ts",
+    "build":    "tsc",
+    "start":    "node dist/index.js",
+    "test":     "vitest",
+    "migrate":  "node -r tsx/cjs src/db/migrate.ts",
+    "worker":   "tsx watch src/worker/worker.ts",
+    "seed":     "tsx src/scripts/seed.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "ioredis": "^5.10.1",
+    "jsonwebtoken": "^9.0.3",
+    "node-cron": "^4.2.1",
+    "nodemailer": "^8.0.4",
+    "nodemon": "^3.1.14",
+    "pg": "^8.20.0",
+    "redis": "^5.11.0",
+    "socket.io": "^4.8.3",
+    "uuid": "^13.0.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@faker-js/faker": "^10.4.0",
+    "@types/bcrypt": "^6.0.0",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^25.5.0",
+    "@types/nodemailer": "^7.0.11",
+    "@types/pg": "^8.20.0",
+    "@types/uuid": "^10.0.0",
+    "socket.io-client": "^4.8.3",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.2"
+  }
+}
