@@ -1,32 +1,34 @@
-export type EmailPayload = {
+type EmailPayload = {
     receiver: string,
     subject: string,
     message: string
-}
+};
 
-export type CleanupPayload = {
+type CleanupPayload = {
     path: string
-}
+};
 
-export type dbPayload = {
+type dbPayload = {
     table: string
-}
+};
 
-export type WebhookPayload = {
+type WebhookPayload = {
     url: string,
     method: "GET" | "POST" | "PUT" | "DELETE",
     headers: Record<string, string>,
     body: string
-}
+};
+
+export type Payload = EmailPayload | CleanupPayload | dbPayload | WebhookPayload;
 
 export type Job = {
     id: string,
     name: string,
-    payload: EmailPayload | CleanupPayload | WebhookPayload, 
+    payload: Payload, 
     status: "PENDING" | "PROCESSING" | "SUCCESS" | "DEAD",
-    priorty: string,
+    priorty: number,
     createdAt: Date,
-    runAt: Date,
+    runAt: number,
     attempts: number,
     maxRetries: number,
     timeout: number
