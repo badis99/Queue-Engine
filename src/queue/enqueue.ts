@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import { keys } from "./keys";
 import { createClient } from "redis";
 import { env } from "../config/env";
+import { jobToHash } from "./jobHash";
 
 const redis = createClient({ url: env.REDIS_URL });
 
@@ -27,8 +28,7 @@ export async function enqueueJob(jobName: string,payload: Payload, priority: num
 
     await redis.hSet(
         keys.dataHash(newJob.id),
-        newJob.id,
-        JSON.stringify(newJob)
+        jobToHash(newJob)
     );
 
     await redis.zAdd(
