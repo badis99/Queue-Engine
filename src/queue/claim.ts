@@ -3,7 +3,6 @@ import { join } from "path";
 import { createClient } from "redis";
 import { env } from "../config/env";
 import { keys } from "./keys";
-import { Job } from "./types";
 
 const redis = createClient({ url: env.REDIS_URL });
 
@@ -12,7 +11,7 @@ redis.connect().catch(err => {
     process.exit(1);
 });
 
-export async function claimJob() {
+export async function claimJob(): Promise<string | null> {
     const luaScriptPath = join(process.cwd(), "src", "queue", "scripts", "claim_job.lua");
     const luaScript = readFileSync(luaScriptPath, "utf-8");
     
@@ -22,6 +21,10 @@ export async function claimJob() {
         }
     );
 
-    return result
+    if (result === null || typeof result === "string") {
+        return result;
+    }
+
+    throw new Error(`Unexpected Lua return type: ${typeof result}`);
 
 }
