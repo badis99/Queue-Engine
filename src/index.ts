@@ -1,15 +1,8 @@
-import { createClient } from "redis";
 import { Jobworker } from "./worker/worker";
-import { env } from "./config/env";
-
-const redis = createClient({ url: env.REDIS_URL });
-
-redis.connect().catch(err => {
-    console.error("Presence Redis connection failed:", err);
-    process.exit(1);
-});
+import { getRedisClient } from "./config/redis";
 
 async function main() {
+    const redis = await getRedisClient();
     await redis.FLUSHALL();
     await Jobworker();
     return;
