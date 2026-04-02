@@ -1,17 +1,10 @@
 import { readFileSync } from "fs";
 import { join } from "path";
-import { createClient } from "redis";
-import { env } from "../config/env";
 import { keys } from "./keys";
-
-const redis = createClient({ url: env.REDIS_URL });
-
-redis.connect().catch(err => {
-    console.error("Presence Redis connection failed:", err);
-    process.exit(1);
-});
+import { getRedisClient } from "../config/redis";
 
 export async function claimJob(): Promise<string | null> {
+    const redis = await getRedisClient();
     const luaScriptPath = join(process.cwd(), "src", "queue", "scripts", "claim_job.lua");
     const luaScript = readFileSync(luaScriptPath, "utf-8");
     
