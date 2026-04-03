@@ -30,4 +30,16 @@ export async function jobFail(jobId: string): Promise<void> {
         score : Date.now()
     })
 
+    const deadQueueLength: number = await redis.zCard(keys.dead());
+
+    if(deadQueueLength > 100){
+        const lastJobQueuedInDeadQueue = await redis.zRangeWithScores(keys.dead(),-1,-1); 
+
+        await redis.zAdd(keys.pending(),{
+            value : lastJobQueuedInDeadQueue[0].value,
+            score : Date.now()
+        });
+
+        await redis.zRem(keys.dead(),lastJobQueuedInDeadQueue[0].value);
+    }
 }
