@@ -27,7 +27,7 @@ export type Job = {
     payload: Payload, 
     status: "PENDING" | "PROCESSING" | "SUCCESS" | "DEAD",
     priorty: number,
-    createdAt: Date,
+    createdAt: number,
     runAt: number,
     attempts: number,
     maxRetries: number,

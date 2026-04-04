@@ -13,7 +13,7 @@ export async function enqueueJob(jobName: string,payload: Payload, priority: num
         payload : payload,
         status: "PENDING",
         priorty: priority,
-        createdAt: new Date(),
+        createdAt:  Date.now(),
         runAt: Date.now(),
         attempts: 0,
         maxRetries: 5,
