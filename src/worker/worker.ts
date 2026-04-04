@@ -56,7 +56,7 @@ export async function Jobworker() {
                 await Promise.race([
                     hang_test("Email"),
                     new Promise<never>((_, reject) => {
-                        setTimeout(() => reject(new Error("Job handler timeout")), timeoutMs);
+                        setTimeout(() => reject(new Error("Job handler timeout")), timeoutMs + 5000);
                     })
                 ]);
 
