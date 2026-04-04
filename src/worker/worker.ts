@@ -3,11 +3,17 @@ import { Job, Payload } from "../queue/types";
 import { keys } from "../queue/keys";
 import { getRedisClient } from "../config/redis";
 import { jobFail } from "../queue/fail";
-import { handleJob } from "../handler/handler";
+import { handleJob,  hang_test} from "../handler/handler";
 import { claimJob } from "../queue/claim";
+import { stallDetector } from "./stall_detector";
 
 export async function Jobworker() {
     const redis = await getRedisClient();
+    const stallPoller = setInterval(() => {
+        stallDetector().catch((error) => {
+            console.error("stallDetector failed:", error);
+        });
+    }, 1000);
 
     const payload1: Payload = {
         receiver: "user1@user.com",
@@ -22,36 +28,45 @@ export async function Jobworker() {
     }   
 
     const job1: Job = await enqueueJob("email", payload1,1);
-    const job2: Job = await enqueueJob("email", payload2);
+    // const job2: Job = await enqueueJob("email", payload2);
 
     const DebutPendingSet = await redis.zRangeWithScores(keys.pending(),0,-1);
     console.log(DebutPendingSet);
 
-    while(true){
-        const pendingCount = await redis.zCard(keys.pending());
-        if (pendingCount === 0) {
-            break;
-        }
+    try {
+        while(true){
+            const pendingCount = await redis.zCard(keys.pending());
+            const processingCount = await redis.zCard(keys.processing());
 
-        const claimedJobId = await claimJob();
-
-        if(!claimedJobId){
-            const nextPendingJob = await redis.zRangeWithScores(keys.pending(), 0, 0);
-            if (nextPendingJob.length === 0) {
+            if (pendingCount === 0 && processingCount === 0) {
                 break;
             }
 
-            const waitMs = Math.max(0, nextPendingJob[0].score - Date.now());
-            await new Promise((resolve) => setTimeout(resolve, Math.min(waitMs, 200)));
-            continue;
-        }
+            const claimedJobId = await claimJob();
 
-        try {
-            await handleJob(claimedJobId);
-            await redis.zRem(keys.processing(), claimedJobId);
-        } catch (error) {
-            await jobFail(claimedJobId);
+            if(!claimedJobId){
+                await new Promise((resolve) => setTimeout(resolve, 200));
+                continue;
+            }
+
+            const jobHash = await redis.hGetAll(keys.dataHash(claimedJobId));
+            const timeoutMs = Number(jobHash.timeout) || 5000;
+
+            try {
+                await Promise.race([
+                    hang_test("Email"),
+                    new Promise<never>((_, reject) => {
+                        setTimeout(() => reject(new Error("Job handler timeout")), timeoutMs);
+                    })
+                ]);
+
+                await redis.zRem(keys.processing(), claimedJobId);
+            } catch (error) {
+                await jobFail(claimedJobId);
+            }
         }
+    } finally {
+        clearInterval(stallPoller);
     }
 
     const DebutProcessingSet = await redis.zRangeWithScores(keys.processing(),0,-1);
