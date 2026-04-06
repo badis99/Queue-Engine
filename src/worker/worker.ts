@@ -1,9 +1,7 @@
-import { enqueueJob } from "../queue/enqueue";
-import { Job, Payload } from "../queue/types";
 import { keys } from "../queue/keys";
 import { getRedisClient } from "../config/redis";
 import { jobFail } from "../queue/fail";
-import { handleJob,  hang_test, sleep} from "../handler/handler";
+import { handleJob } from "../handler/handler";
 import { claimJob } from "../queue/claim";
 import { stallDetector } from "./stall_detector";
 import { Semaphore } from "./semaphore";
@@ -15,29 +13,6 @@ export async function Jobworker() {
             console.error("stallDetector failed:", error);
         });
     }, 1000);
-
-    const processingQueue = setInterval(async () => {
-        const DebutPendingSet = await redis.zRangeWithScores(keys.processing(),0,-1);
-        console.log(DebutPendingSet);
-    },1000)
-
-    const payload1: Payload = {
-        receiver: "user1@user.com",
-        subject: "The keyboard",
-        message: "Bring me the keyboard next time"
-    }
-    
-    const payload2: Payload = {
-        receiver: "user2@user.com",
-        subject: "The Mouse",
-        message: "Bring me the mouse next time"
-    }   
-
-    const job1: Job = await enqueueJob("email", payload1,1);
-    const job2: Job = await enqueueJob("email", payload2);
-
-    const DebutPendingSet = await redis.zRangeWithScores(keys.pending(),0,-1);
-    console.log(DebutPendingSet);
 
     const semaphore = new Semaphore(1);
 
@@ -62,21 +37,21 @@ export async function Jobworker() {
             await semaphore.acquire();
 
             try {
-                await sleep();
+                await handleJob(claimedJobId);
                 await redis.zRem(keys.processing(), claimedJobId);
             } catch (error) {
                 await jobFail(claimedJobId);
             } finally {
-                await semaphore.release();
+                semaphore.release();
             }
         }
     } finally {
         clearInterval(stallPoller);
     }
 
-    const DebutProcessingSet = await redis.zRangeWithScores(keys.processing(),0,-1);
-    console.log(DebutProcessingSet);
+    // const DebutProcessingSet = await redis.zRangeWithScores(keys.processing(),0,-1);
+    // console.log(DebutProcessingSet);
 
-    const deadQueuedJobs = await redis.zRangeWithScores(keys.dead(),0,-1);
-    console.log(deadQueuedJobs);
+    // const deadQueuedJobs = await redis.zRangeWithScores(keys.dead(),0,-1);
+    // console.log(deadQueuedJobs);
 }
