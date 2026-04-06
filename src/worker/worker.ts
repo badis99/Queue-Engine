@@ -5,6 +5,7 @@ import { handleJob } from "../handler/handler";
 import { claimJob } from "../queue/claim";
 import { stallDetector } from "./stall_detector";
 import { Semaphore } from "./semaphore";
+import { recordRunHistory } from "../queue/run-history";
 
 export async function Jobworker() {
     const redis = await getRedisClient();
@@ -33,14 +34,18 @@ export async function Jobworker() {
             }
 
             const jobHash = await redis.hGetAll(keys.dataHash(claimedJobId));
+            const jobName = jobHash.name ?? "unknown";
 
             await semaphore.acquire();
 
             try {
                 await handleJob(claimedJobId);
                 await redis.zRem(keys.processing(), claimedJobId);
+                await recordRunHistory(claimedJobId, jobName, "SUCCESS", null);
             } catch (error) {
                 await jobFail(claimedJobId);
+                const message = error instanceof Error ? error.message : "Unknown error";
+                await recordRunHistory(claimedJobId, jobName, "FAILED", message);
             } finally {
                 semaphore.release();
             }

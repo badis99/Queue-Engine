@@ -1,20 +1,20 @@
-export async function handleJob(jobId: string) {
-    throw new Error('Fialed to handle the job');
-}
+import { getRedisClient } from "../config/redis";
+import { runRegisteredHandler } from "../handlers/registry";
+import { jobFromHash } from "../queue/jobHash";
+import { keys } from "../queue/keys";
 
-export const sleep = () => new Promise<void>((resolve) => setTimeout(resolve, 5000));
+export async function handleJob(jobId: string): Promise<void> {
+    const redis = await getRedisClient();
+    const hash = await redis.hGetAll(keys.dataHash(jobId));
+    const job = jobFromHash(hash);
 
-
-export async function hang_test(jobName: string): Promise<void> {
-    if(jobName === 'Email'){
-        console.log("Starting hang-test handler (will never finish)");
-
-        await new Promise<void>(() => {
-
-        });
-
-        return;
+    if (!job) {
+        throw new Error(`Job '${jobId}' not found or malformed`);
     }
 
-    console.log("Name is incorrect");
+    await runRegisteredHandler(job.name, job.payload);
+
+    await redis.hSet(keys.dataHash(job.id), {
+        status: "SUCCESS"
+    });
 }

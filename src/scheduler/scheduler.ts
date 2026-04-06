@@ -42,6 +42,11 @@ async function rebuildScheduleFromDefinitions(now: Date = new Date()): Promise<v
     await redis.del(keys.recurring());
 
     for (const job of definitions) {
+        if (job.options?.paused) {
+            logScheduler(`Skipping ${job.name}: recurring definition is paused`);
+            continue;
+        }
+
         const next = nextRun(job.cron, now);
         if (!next) {
             logScheduler(`Skipping ${job.name}: unable to compute next run from cron '${job.cron}'`);
@@ -57,6 +62,10 @@ async function rebuildScheduleFromDefinitions(now: Date = new Date()): Promise<v
 }
 
 async function refreshSoonestTimer(): Promise<void> {
+    if (!schedulerRunning) {
+        return;
+    }
+
     const redis = await getRedisClient();
     clearSchedulerTimer();
 
@@ -74,6 +83,10 @@ async function refreshSoonestTimer(): Promise<void> {
 }
 
 async function onTimerFired(): Promise<void> {
+    if (!schedulerRunning) {
+        return;
+    }
+
     const redis = await getRedisClient();
     const nowMs = Date.now();
     const scheduled = await redis.zRangeWithScores(keys.recurring(), 0, -1);
@@ -105,6 +118,12 @@ async function onTimerFired(): Promise<void> {
             definition = JSON.parse(rawDefinition) as RecurringJob;
         } catch {
             await redis.zRem(keys.recurring(), entry.value);
+            continue;
+        }
+
+        if (definition.options?.paused) {
+            await redis.zRem(keys.recurring(), definition.name);
+            logScheduler(`Skipped ${definition.name}: recurring definition is paused`);
             continue;
         }
 
@@ -154,10 +173,10 @@ export async function scheduleJob(
     name: string,
     payload: Payload,
     cron: string,
-    options?: { priority?: number }
+    options?: { priority?: number; paused?: boolean }
 ): Promise<void> {
     const redis = await getRedisClient();
-    const definition: RecurringJob = { name, payload, cron, options };
+    const definition: RecurringJob = { name, payload, cron, options: { priority: options?.priority, paused: options?.paused ?? false } };
 
     await redis.hSet(keys.recurringDefinitions(), {
         [name]: JSON.stringify(definition)
@@ -166,10 +185,21 @@ export async function scheduleJob(
 
     const next = nextRun(cron, new Date());
 
+    if (definition.options?.paused) {
+        await redis.zRem(keys.recurring(), name);
+        logScheduler(`Registered ${name} as paused recurring definition`);
+        if (schedulerRunning) {
+            await refreshSoonestTimer();
+        }
+        return;
+    }
+
     if (!next) {
         await redis.zRem(keys.recurring(), name);
         logScheduler(`Removed ${name} from recurring schedule: invalid next run`);
-        await refreshSoonestTimer();
+        if (schedulerRunning) {
+            await refreshSoonestTimer();
+        }
         return;
     }
 
@@ -179,6 +209,111 @@ export async function scheduleJob(
     });
     logScheduler(`Scheduled ${name} for first run at ${next.toISOString()}`);
 
-    await refreshSoonestTimer();
+    if (schedulerRunning) {
+        await refreshSoonestTimer();
+    }
 
+}
+
+export type RecurringJobView = {
+    name: string;
+    cron: string;
+    payload: Payload;
+    priority: number;
+    paused: boolean;
+    nextRunAt: number | null;
+};
+
+export async function listRecurringJobs(): Promise<RecurringJobView[]> {
+    const redis = await getRedisClient();
+    const definitions = await loadRecurringDefinitions();
+
+    const views = await Promise.all(
+        definitions.map(async (definition) => {
+            const paused = definition.options?.paused ?? false;
+            const nextScore = await redis.zScore(keys.recurring(), definition.name);
+
+            return {
+                name: definition.name,
+                cron: definition.cron,
+                payload: definition.payload,
+                priority: definition.options?.priority ?? 0,
+                paused,
+                nextRunAt: paused ? null : nextScore
+            };
+        })
+    );
+
+    views.sort((a, b) => {
+        const aTime = a.nextRunAt ?? Number.MAX_SAFE_INTEGER;
+        const bTime = b.nextRunAt ?? Number.MAX_SAFE_INTEGER;
+        return aTime - bTime;
+    });
+
+    return views;
+}
+
+export async function pauseRecurringJob(name: string): Promise<void> {
+    const redis = await getRedisClient();
+    const rawDefinition = await redis.hGet(keys.recurringDefinitions(), name);
+    if (!rawDefinition) {
+        throw new Error(`Recurring job '${name}' was not found`);
+    }
+
+    const definition = JSON.parse(rawDefinition) as RecurringJob;
+    definition.options = {
+        ...definition.options,
+        paused: true
+    };
+
+    await redis.hSet(keys.recurringDefinitions(), {
+        [name]: JSON.stringify(definition)
+    });
+    await redis.zRem(keys.recurring(), name);
+
+    if (schedulerRunning) {
+        await refreshSoonestTimer();
+    }
+}
+
+export async function resumeRecurringJob(name: string): Promise<void> {
+    const redis = await getRedisClient();
+    const rawDefinition = await redis.hGet(keys.recurringDefinitions(), name);
+    if (!rawDefinition) {
+        throw new Error(`Recurring job '${name}' was not found`);
+    }
+
+    const definition = JSON.parse(rawDefinition) as RecurringJob;
+    definition.options = {
+        ...definition.options,
+        paused: false
+    };
+
+    const next = nextRun(definition.cron, new Date());
+    if (!next) {
+        throw new Error(`Unable to compute next run for '${name}'`);
+    }
+
+    await redis.hSet(keys.recurringDefinitions(), {
+        [name]: JSON.stringify(definition)
+    });
+
+    await redis.zAdd(keys.recurring(), {
+        value: name,
+        score: next.getTime()
+    });
+
+    if (schedulerRunning) {
+        await refreshSoonestTimer();
+    }
+}
+
+export async function deleteRecurringJob(name: string): Promise<void> {
+    const redis = await getRedisClient();
+    await redis.hDel(keys.recurringDefinitions(), name);
+    await redis.zRem(keys.recurring(), name);
+
+    if (schedulerRunning) {
+        await refreshSoonestTimer();
+    }
 }
