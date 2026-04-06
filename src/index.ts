@@ -1,49 +1,82 @@
-import { getRedisClient } from "./config/redis";
-import { Payload } from "./queue/types";
-import { scheduleJob, startScheduler, stopScheduler } from "./scheduler/scheduler";
-import { keys } from "./queue/keys";
+import express from "express";
+import { createServer } from "http";
+import path from "path";
+import { Server } from "socket.io";
+import { env } from "./config/env";
+import { jobsRouter } from "./api/jobs.router";
+import { statsRouter } from "./api/stats.router";
+import { getControlRoomPayload } from "./api/stats.service";
+import { getStatsSnapshot } from "./api/stats.service";
+import { ensureRunHistoryTable } from "./queue/run-history";
 import { Jobworker } from "./worker/worker";
+import { startScheduler } from "./scheduler/scheduler";
+import { getRedisClient } from "./config/redis";
+import { keys } from "./queue/keys";
 
 function logApp(message: string): void {
     console.log(`[app ${new Date().toISOString()}] ${message}`);
 }
 
-async function printSnapshot(label: string): Promise<void> {
-    const redis = await getRedisClient();
-    const pendingCount = await redis.zCard(keys.pending());
-    const recurring = await redis.zRangeWithScores(keys.recurring(), 0, -1);
-
-    logApp(`${label} pending=${pendingCount}`);
-    logApp(`${label} recurring=${JSON.stringify(recurring)}`);
-}
-
 async function main() {
+    await ensureRunHistoryTable();
     const redis = await getRedisClient();
-    await redis.FLUSHALL();
-    logApp("Redis cleared");
 
-    const payload1: Payload = {
-        receiver: "user1@user.com",
-        subject: "The keyboard",
-        message: "Bring me the keyboard next time"
-    };
-        
-    const payload2: Payload = {
-        receiver: "user2@user.com",
-        subject: "The Mouse",
-        message: "Bring me the mouse next time"
-    };
-    
-    await scheduleJob("email1", payload1, "* * * * *", { priority: 1 });
-    await scheduleJob("email2", payload2, "*/2 * * * *", { priority: 0 });
+    await redis.del([
+        keys.pending(),
+        keys.processing(),
+        keys.dead(),
+        keys.recurring(),
+        keys.recurringDefinitions()
+    ]);
+    logApp("Cleared queue runtime keys for fresh startup");
 
-    await printSnapshot("before-start");
     await startScheduler();
 
-    await printSnapshot("after-start");
+    const app = express();
+    const server = createServer(app);
+    const io = new Server(server, {
+        cors: {
+            origin: "*"
+        }
+    });
+
+    app.use(express.json());
+    app.use("/api/jobs", jobsRouter);
+    app.use("/api/stats", statsRouter);
+    let queuePaused = false;
+
+    app.post("/api/queues/pause", (_req, res) => {
+        queuePaused = true;
+        res.json({ ok: true, paused: true });
+    });
+
+    app.post("/api/queues/resume", (_req, res) => {
+        queuePaused = false;
+        res.json({ ok: true, paused: false });
+    });
+
+    app.get("/dashboard", (_req, res) => {
+        res.sendFile(path.join(process.cwd(), "src", "api", "dashboard", "index.html"));
+    });
+
+    const statsEmitter = setInterval(async () => {
+        try {
+            const stats = await getStatsSnapshot();
+            io.emit("stats:update", stats);
+
+            const controlRoom = await getControlRoomPayload();
+            io.emit("stats", controlRoom);
+        } catch (error) {
+            console.error("stats emitter failed:", error);
+        }
+    }, 2000);
 
     let workerRunning = false;
     const workerLoop = setInterval(() => {
+        if (queuePaused) {
+            return;
+        }
+
         if (workerRunning) {
             return;
         }
@@ -56,20 +89,19 @@ async function main() {
             .finally(() => {
                 workerRunning = false;
             });
-    }, 2000);
+    }, 1000);
 
-    const observer = setInterval(() => {
-        void printSnapshot("tick");
-    }, 10000);
+    const port = Number(env.PORT);
+    server.listen(port, () => {
+        logApp(`Server listening on http://localhost:${port}`);
+        logApp(`Dashboard available at http://localhost:${port}/dashboard`);
+    });
 
-    setTimeout(async () => {
+    process.on("SIGINT", () => {
+        clearInterval(statsEmitter);
         clearInterval(workerLoop);
-        clearInterval(observer);
-        stopScheduler();
-        await printSnapshot("final");
-        logApp("Demo completed, exiting process");
-        process.exit(0);
-    }, 121000);
+        server.close(() => process.exit(0));
+    });
 }
 
 main().catch((err) => {

@@ -5,7 +5,8 @@ type EmailPayload = {
 };
 
 type CleanupPayload = {
-    path: string
+    path: string,
+    maxAgeMinutes?: number
 };
 
 type dbPayload = {
@@ -39,6 +40,7 @@ export type RecurringJob = {
     payload: Payload, 
     cron: string,
     options?: {
-        priority?: number
+        priority?: number,
+        paused?: boolean
     }
 }
