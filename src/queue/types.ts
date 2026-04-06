@@ -33,3 +33,12 @@ export type Job = {
     maxRetries: number,
     timeout: number
 }
+
+export type RecurringJob = {
+    name: string,
+    payload: Payload, 
+    cron: string,
+    options?: {
+        priority?: number
+    }
+}

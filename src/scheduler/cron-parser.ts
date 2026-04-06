@@ -109,5 +109,3 @@ export function nextRun(expression: string, from: Date = new Date()): Date | nul
 
     return null;
 }
-
-console.log(nextRun('0 0 29 2 *',new Date()));
