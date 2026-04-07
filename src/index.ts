@@ -7,6 +7,7 @@ import { jobsRouter } from "./api/jobs.router";
 import { statsRouter } from "./api/stats.router";
 import { getControlRoomPayload } from "./api/stats.service";
 import { getStatsSnapshot } from "./api/stats.service";
+import { runMigrations } from "./db/migrate";
 import { ensureRunHistoryTable } from "./queue/run-history";
 import { Jobworker } from "./worker/worker";
 import { startScheduler } from "./scheduler/scheduler";
@@ -18,6 +19,7 @@ function logApp(message: string): void {
 }
 
 async function main() {
+    await runMigrations();
     await ensureRunHistoryTable();
     const redis = await getRedisClient();
 
