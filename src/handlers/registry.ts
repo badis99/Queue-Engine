@@ -1,3 +1,6 @@
+import { getRedisClient } from "../config/redis";
+import { jobFromHash } from "../queue/jobHash";
+import { keys } from "../queue/keys";
 import { Payload } from "../queue/types";
 import { cleanupHandler } from "./cleanup.handler";
 import { dbVacuumHandler } from "./db-vacuum.handler";
@@ -20,4 +23,20 @@ export async function runRegisteredHandler(jobName: string, payload: Payload): P
   }
 
   await handler(payload);
+}
+
+export async function handleRegisteredJob(jobId: string): Promise<void> {
+  const redis = await getRedisClient();
+  const hash = await redis.hGetAll(keys.dataHash(jobId));
+  const job = jobFromHash(hash);
+
+  if (!job) {
+    throw new Error(`Job '${jobId}' not found or malformed`);
+  }
+
+  await runRegisteredHandler(job.name, job.payload);
+
+  await redis.hSet(keys.dataHash(job.id), {
+    status: "SUCCESS"
+  });
 }

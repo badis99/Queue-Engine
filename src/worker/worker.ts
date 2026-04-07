@@ -1,7 +1,7 @@
 import { keys } from "../queue/keys";
 import { getRedisClient } from "../config/redis";
 import { jobFail } from "../queue/fail";
-import { handleJob } from "../handler/handler";
+import { handleRegisteredJob } from "../handlers/registry";
 import { claimJob } from "../queue/claim";
 import { stallDetector } from "./stall_detector";
 import { Semaphore } from "./semaphore";
@@ -39,7 +39,7 @@ export async function Jobworker() {
             await semaphore.acquire();
 
             try {
-                await handleJob(claimedJobId);
+                await handleRegisteredJob(claimedJobId);
                 await redis.zRem(keys.processing(), claimedJobId);
                 await recordRunHistory(claimedJobId, jobName, "SUCCESS", null);
             } catch (error) {
