@@ -29,13 +29,13 @@ type RecurringJobRow = {
     next_run_at: Date | null;
 };
 
-async function loadRecurringDefinitions(): Promise<RecurringJob[]> {
-    const result = await db.query<RecurringJobRow>(
-        `SELECT name, cron, payload, priority, paused, next_run_at
-         FROM recurring_jobs`
-    );
+type ScheduleJobOptions = {
+    priority?: number;
+    paused?: boolean;
+};
 
-    return result.rows.map((row) => ({
+function toRecurringJob(row: RecurringJobRow): RecurringJob {
+    return {
         name: row.name,
         cron: row.cron,
         payload: row.payload,
@@ -43,7 +43,22 @@ async function loadRecurringDefinitions(): Promise<RecurringJob[]> {
             priority: row.priority,
             paused: row.paused
         }
-    }));
+    };
+}
+
+async function refreshTimerIfRunning(): Promise<void> {
+    if (schedulerRunning) {
+        await refreshSoonestTimer();
+    }
+}
+
+async function loadRecurringDefinitions(): Promise<RecurringJob[]> {
+    const result = await db.query<RecurringJobRow>(
+        `SELECT name, cron, payload, priority, paused, next_run_at
+         FROM recurring_jobs`
+    );
+
+    return result.rows.map(toRecurringJob);
 }
 
 async function getRecurringDefinitionByName(name: string): Promise<RecurringJob | null> {
@@ -59,15 +74,7 @@ async function getRecurringDefinitionByName(name: string): Promise<RecurringJob 
         return null;
     }
 
-    return {
-        name: row.name,
-        cron: row.cron,
-        payload: row.payload,
-        options: {
-            priority: row.priority,
-            paused: row.paused
-        }
-    };
+    return toRecurringJob(row);
 }
 
 async function rebuildScheduleFromDefinitions(now: Date = new Date()): Promise<void> {
@@ -134,7 +141,7 @@ async function onTimerFired(): Promise<void> {
             continue;
         }
 
-        const lockKey = `queue:recurring:lock:${entry.value}:${entry.score}`;
+        const lockKey = keys.recurringLock(entry.value, entry.score);
         const lockToken = await acquireLock(lockKey, 60);
         if (!lockToken) {
             logScheduler(`Skipped ${entry.value}: lock not acquired (another instance handled it)`);
@@ -142,42 +149,42 @@ async function onTimerFired(): Promise<void> {
         }
 
         try {
-        const definition = await getRecurringDefinitionByName(entry.value);
-        if (!definition) {
-            await redis.zRem(keys.recurring(), entry.value);
-            continue;
-        }
+            const definition = await getRecurringDefinitionByName(entry.value);
+            if (!definition) {
+                await redis.zRem(keys.recurring(), entry.value);
+                continue;
+            }
 
-        if (definition.options?.paused) {
-            await redis.zRem(keys.recurring(), definition.name);
-            logScheduler(`Skipped ${definition.name}: recurring definition is paused`);
-            continue;
-        }
+            if (definition.options?.paused) {
+                await redis.zRem(keys.recurring(), definition.name);
+                logScheduler(`Skipped ${definition.name}: recurring definition is paused`);
+                continue;
+            }
 
-        const priority = definition.options?.priority ?? 0;
-        await enqueueJob(definition.name, definition.payload, priority);
-        logScheduler(`Enqueued recurring job ${definition.name} with priority ${priority}`);
+            const priority = definition.options?.priority ?? 0;
+            await enqueueJob(definition.name, definition.payload, priority);
+            logScheduler(`Enqueued recurring job ${definition.name} with priority ${priority}`);
 
-        const next = nextRun(definition.cron, new Date(nowMs));
-        if (!next) {
-            await redis.zRem(keys.recurring(), definition.name);
-            logScheduler(`Removed ${definition.name}: unable to compute next run`);
-            continue;
-        }
+            const next = nextRun(definition.cron, new Date(nowMs));
+            if (!next) {
+                await redis.zRem(keys.recurring(), definition.name);
+                logScheduler(`Removed ${definition.name}: unable to compute next run`);
+                continue;
+            }
 
-        await redis.zAdd(keys.recurring(), {
-            value: definition.name,
-            score: next.getTime()
-        });
-        await db.query(
-            `UPDATE recurring_jobs
-             SET last_run_at = NOW(),
-                 next_run_at = to_timestamp($2 / 1000.0),
-                 updated_at = NOW()
-             WHERE name = $1`,
-            [definition.name, next.getTime()]
-        );
-        logScheduler(`Rescheduled ${definition.name} for ${next.toISOString()}`);
+            await redis.zAdd(keys.recurring(), {
+                value: definition.name,
+                score: next.getTime()
+            });
+            await db.query(
+                `UPDATE recurring_jobs
+                 SET last_run_at = NOW(),
+                     next_run_at = to_timestamp($2 / 1000.0),
+                     updated_at = NOW()
+                 WHERE name = $1`,
+                [definition.name, next.getTime()]
+            );
+            logScheduler(`Rescheduled ${definition.name} for ${next.toISOString()}`);
         } finally {
             await releaseLock(lockKey, lockToken);
         }
@@ -208,7 +215,7 @@ export async function scheduleJob(
     name: string,
     payload: Payload,
     cron: string,
-    options?: { priority?: number; paused?: boolean }
+    options?: ScheduleJobOptions
 ): Promise<void> {
     const redis = await getRedisClient();
     const definition: RecurringJob = { name, payload, cron, options: { priority: options?.priority, paused: options?.paused ?? false } };
@@ -238,18 +245,14 @@ export async function scheduleJob(
     if (definition.options?.paused) {
         await redis.zRem(keys.recurring(), name);
         logScheduler(`Registered ${name} as paused recurring definition`);
-        if (schedulerRunning) {
-            await refreshSoonestTimer();
-        }
+        await refreshTimerIfRunning();
         return;
     }
 
     if (!next) {
         await redis.zRem(keys.recurring(), name);
         logScheduler(`Removed ${name} from recurring schedule: invalid next run`);
-        if (schedulerRunning) {
-            await refreshSoonestTimer();
-        }
+        await refreshTimerIfRunning();
         return;
     }
 
@@ -266,9 +269,7 @@ export async function scheduleJob(
     );
     logScheduler(`Scheduled ${name} for first run at ${next.toISOString()}`);
 
-    if (schedulerRunning) {
-        await refreshSoonestTimer();
-    }
+    await refreshTimerIfRunning();
 
 }
 
@@ -322,9 +323,7 @@ export async function pauseRecurringJob(name: string): Promise<void> {
     );
     await redis.zRem(keys.recurring(), name);
 
-    if (schedulerRunning) {
-        await refreshSoonestTimer();
-    }
+    await refreshTimerIfRunning();
 }
 
 export async function resumeRecurringJob(name: string): Promise<void> {
@@ -353,9 +352,7 @@ export async function resumeRecurringJob(name: string): Promise<void> {
         score: next.getTime()
     });
 
-    if (schedulerRunning) {
-        await refreshSoonestTimer();
-    }
+    await refreshTimerIfRunning();
 }
 
 export async function deleteRecurringJob(name: string): Promise<void> {
@@ -363,7 +360,5 @@ export async function deleteRecurringJob(name: string): Promise<void> {
     await db.query(`DELETE FROM recurring_jobs WHERE name = $1`, [name]);
     await redis.zRem(keys.recurring(), name);
 
-    if (schedulerRunning) {
-        await refreshSoonestTimer();
-    }
+    await refreshTimerIfRunning();
 }
