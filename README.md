@@ -17,30 +17,9 @@ QueueEngine is a distributed job queue showcasing:
 
 ## 🏗️ System Design (High-Level)
 
-```
-                ┌───────────────┐
-                │   Producers   │
-                └──────┬────────┘
-                       │ enqueue
-                       ▼
-              ┌───────────────────┐
-              │       Redis       │
-              │  Sorted Sets +    │
-              │    Lua Scripts    │
-              └──────┬────────────┘
-                     │ claim jobs
-        ┌────────────┴────────────┐
-        ▼                         ▼
- ┌──────────────┐         ┌──────────────┐
- │   Worker 1   │  ...    │   Worker N   │
- └──────┬───────┘         └──────┬───────┘
-        │ process                │
-        ▼                        ▼
-   ┌───────────┐           ┌───────────┐
-   │ PostgreSQL│           │ Dashboard │
-   │ metadata  │           │ metrics   │
-   └───────────┘           └───────────┘
-```
+<p align="center">
+  <img src="./assets/QueueEngineArchitecture.png" alt="QueueEngine Architecture" width="800"/>
+</p>
 
 ---
 
