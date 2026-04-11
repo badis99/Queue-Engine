@@ -6,6 +6,7 @@ import { claimJob } from "../queue/claim";
 import { stallDetector } from "./stall_detector";
 import { Semaphore } from "./semaphore";
 import { recordRunHistory } from "../queue/run-history";
+import { completeJob } from "./complete";
 
 export async function Jobworker() {
     const redis = await getRedisClient();
@@ -15,7 +16,7 @@ export async function Jobworker() {
         });
     }, 1000);
 
-    const semaphore = new Semaphore(1);
+    const semaphore = new Semaphore(5);
 
     try {
         while(true){
@@ -40,8 +41,7 @@ export async function Jobworker() {
 
             try {
                 await handleRegisteredJob(claimedJobId);
-                await redis.zRem(keys.processing(), claimedJobId);
-                await recordRunHistory(claimedJobId, jobName, "SUCCESS", null);
+                await completeJob(claimedJobId, jobName);
             } catch (error) {
                 await jobFail(claimedJobId);
                 const message = error instanceof Error ? error.message : "Unknown error";
